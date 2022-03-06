@@ -89,6 +89,10 @@ class GitDownloader extends VcsDownloader implements DvcsDownloaderInterface
         $path = $this->normalizePath($path);
         $cachePath = $this->config->get('cache-vcs-dir').'/'.Preg::replace('{[^a-z0-9.]}i', '-', $url).'/';
         $ref = $package->getSourceReference();
+        $originalRef = $ref;
+        if (strpos($ref, '#') !== false) {
+            [$ref, $packagePath] = explode('#', $ref);
+        }
         $flag = Platform::isWindows() ? '/D ' : '';
 
         if (!empty($this->cachedPackages[$package->getId()][$ref])) {
@@ -135,7 +139,7 @@ class GitDownloader extends VcsDownloader implements DvcsDownloaderInterface
             $this->setPushUrl($path, $url);
         }
 
-        if ($newRef = $this->updateToCommit($package, $path, (string) $ref, $package->getPrettyVersion())) {
+        if ($newRef = $this->updateToCommit($package, $path, (string) $originalRef, $package->getPrettyVersion())) {
             if ($package->getDistReference() === $package->getSourceReference()) {
                 $package->setDistReference($newRef);
             }
@@ -158,6 +162,9 @@ class GitDownloader extends VcsDownloader implements DvcsDownloaderInterface
 
         $cachePath = $this->config->get('cache-vcs-dir').'/'.Preg::replace('{[^a-z0-9.]}i', '-', $url).'/';
         $ref = $target->getSourceReference();
+        if (strpos($ref, '#') !== false) {
+            [$ref, $packagePath] = explode('#', $ref);
+        }
 
         if (!empty($this->cachedPackages[$target->getId()][$ref])) {
             $msg = "Checking out ".$this->getShortHash($ref).' from cache';
@@ -442,6 +449,11 @@ class GitDownloader extends VcsDownloader implements DvcsDownloaderInterface
      */
     protected function updateToCommit(PackageInterface $package, string $path, string $reference, string $prettyVersion): ?string
     {
+        $packagePath = null;
+        if (strpos($reference, '#') !== false) {
+            [$reference, $packagePath] = explode('#', $reference);
+        }
+
         $force = !empty($this->hasDiscardedChanges[$path]) || !empty($this->hasStashedChanges[$path]) ? '-f ' : '';
 
         // This uses the "--" sequence to separate branch from file parameters.
@@ -450,6 +462,9 @@ class GitDownloader extends VcsDownloader implements DvcsDownloaderInterface
         // If the non-existent branch is actually the name of a file, the file
         // is checked out.
         $template = 'git checkout '.$force.'%s -- && git reset --hard %1$s --';
+        if ($packagePath !== null) {
+            $template .= sprintf(' && ( ( ls %1$s && git filter-repo --force --subdirectory-filter %1$s ) || git rm -r \* )', ProcessExecutor::escape($packagePath));
+        }
         $branch = Preg::replace('{(?:^dev-|(?:\.x)?-dev$)}i', '', $prettyVersion);
 
         $branches = null;
@@ -464,6 +479,9 @@ class GitDownloader extends VcsDownloader implements DvcsDownloaderInterface
             && Preg::isMatch('{^\s+composer/'.preg_quote($reference).'$}m', $branches)
         ) {
             $command = sprintf('git checkout '.$force.'-B %s %s -- && git reset --hard %2$s --', ProcessExecutor::escape($branch), ProcessExecutor::escape('composer/'.$reference));
+            if ($packagePath !== null) {
+                $command .= sprintf(' && ( ( ls %1$s && git filter-repo --force --subdirectory-filter %1$s ) || git rm -r \* )', ProcessExecutor::escape($packagePath));
+            }
             if (0 === $this->process->execute($command, $output, $path)) {
                 return null;
             }
@@ -480,7 +498,13 @@ class GitDownloader extends VcsDownloader implements DvcsDownloaderInterface
             $fallbackCommand = sprintf('git checkout '.$force.'-B %s %s --', ProcessExecutor::escape($branch), ProcessExecutor::escape('composer/'.$branch));
             $resetCommand = sprintf('git reset --hard %s --', ProcessExecutor::escape($reference));
 
-            if (0 === $this->process->execute("($command || $fallbackCommand) && $resetCommand", $output, $path)) {
+            if ($packagePath !== null) {
+                $filterRepoCommand = sprintf(' && ( ( ls %1$s && git filter-repo --force --subdirectory-filter %1$s ) || git rm -r \* )', ProcessExecutor::escape($packagePath));
+            } else {
+                $filterRepoCommand = '';
+            }
+
+            if (0 === $this->process->execute("($command || $fallbackCommand) && $resetCommand $filterRepoCommand", $output, $path)) {
                 return null;
             }
         }

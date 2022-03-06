@@ -352,6 +352,9 @@ class Git
     private function checkRefIsInMirror(string $dir, string $ref): bool
     {
         if (is_dir($dir) && 0 === $this->process->execute('git rev-parse --git-dir', $output, $dir) && trim($output) === '.') {
+            if (strpos($ref, '#') !== false) {
+                [$ref, $packagePath] = explode('#', $ref);
+            }
             $escapedRef = ProcessExecutor::escape($ref.'^{commit}');
             $exitCode = $this->process->execute(sprintf('git rev-parse --quiet --verify %s', $escapedRef), $ignoredOutput, $dir);
             if ($exitCode === 0) {

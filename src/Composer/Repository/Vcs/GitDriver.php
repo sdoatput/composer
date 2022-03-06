@@ -12,6 +12,7 @@
 
 namespace Composer\Repository\Vcs;
 
+use Composer\Json\JsonFile;
 use Composer\Pcre\Preg;
 use Composer\Util\ProcessExecutor;
 use Composer\Util\Filesystem;
@@ -34,6 +35,8 @@ class GitDriver extends VcsDriver
     protected $rootIdentifier;
     /** @var string */
     protected $repoDir;
+    /** @var string */
+    protected $packagePath = '';
 
     /**
      * @inheritDoc
@@ -76,6 +79,10 @@ class GitDriver extends VcsDriver
             }
 
             $cacheUrl = $this->url;
+        }
+
+        if (isset($this->repoConfig['package-path'])) {
+            $this->packagePath = trim($this->repoConfig['package-path'], '/');
         }
 
         $this->getTags();
@@ -122,6 +129,9 @@ class GitDriver extends VcsDriver
      */
     public function getSource(string $identifier): array
     {
+        if (strlen($this->packagePath) > 0) {
+            return array('type' => 'git', 'url' => $this->getUrl(), 'reference' => sprintf('%s#%s', $identifier, $this->packagePath));
+        }
         return array('type' => 'git', 'url' => $this->getUrl(), 'reference' => $identifier);
     }
 
@@ -138,7 +148,13 @@ class GitDriver extends VcsDriver
      */
     public function getFileContent(string $file, string $identifier): ?string
     {
-        $resource = sprintf('%s:%s', ProcessExecutor::escape($identifier), ProcessExecutor::escape($file));
+        $resource = sprintf(
+            '%s:%s',
+            ProcessExecutor::escape($identifier),
+            strlen($this->packagePath) > 0
+                ? ProcessExecutor::escape($this->packagePath . '/' . $file)
+                : ProcessExecutor::escape($file)
+        );
         $this->process->execute(sprintf('git show %s', $resource), $content, $this->repoDir);
 
         if (!trim($content)) {
@@ -242,5 +258,32 @@ class GitDriver extends VcsDriver
         }
 
         return true;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function getComposerInformation(string $identifier): ?array
+    {
+        $cacheIdentifier = $identifier;
+        if ($this->packagePath !== '' && strpos($identifier, $this->packagePath) === false) {
+            $cacheIdentifier = sprintf('%s#%s', $identifier, $this->packagePath);
+        }
+
+        if (!isset($this->infoCache[$cacheIdentifier])) {
+            if ($this->shouldCache($identifier) && $res = $this->cache->read($cacheIdentifier)) {
+                return $this->infoCache[$cacheIdentifier] = JsonFile::parseJson($res);
+            }
+
+            $composer = $this->getBaseComposerInformation($identifier);
+
+            if ($this->shouldCache($identifier)) {
+                $this->cache->write($cacheIdentifier, JsonFile::encode($composer, 0));
+            }
+
+            $this->infoCache[$cacheIdentifier] = $composer;
+        }
+
+        return $this->infoCache[$cacheIdentifier];
     }
 }
